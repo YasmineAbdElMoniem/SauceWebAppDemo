@@ -17,11 +17,11 @@ public class ProductsPage {
     private static final Logger logger = LogManager.getLogger(ProductsPage.class);
     private final WebDriverBot bot;
 
-    // Static Locators
+    // ---------- Static Locators ----------
     private final By titleText = By.xpath("//span[@class='title']");
     private final By pricesPath = By.xpath("//div[@class='inventory_item_price']");
-    private final By sortButton = By.xpath("//select[@class='product_sort_container']");
-    private final By lowToHIGH = By.xpath("//option[@value='lohi']");
+    private final By sortSelect = By.xpath("//select[@class='product_sort_container']");
+    private final By lowToHigh = By.xpath("//option[@value='lohi']");
     private final By cartBadge = By.className("shopping_cart_badge");
     private final By cartIcon = By.className("shopping_cart_link");
     private final By menuBtn = By.id("react-burger-menu-btn");
@@ -56,7 +56,8 @@ public class ProductsPage {
     // ---------- sorting ----------
     @Step("Apply sort: Price Low → High")
     public ProductsPage chooseSortLowToHigh() {
-        bot.click(sortButton).click(lowToHIGH);
+        // Bot.click has its own single wait; we make sure the select is present before selecting the option.
+        bot.click(sortSelect).click(lowToHigh);
         logger.info("Applied sort: Low → High");
         return this;
     }
@@ -67,7 +68,13 @@ public class ProductsPage {
         List<Double> out = new ArrayList<>();
         for (String t : raw) {
             String cleaned = t.replaceAll("[^\\d.]", "");
-            if (!cleaned.isEmpty()) out.add(Double.parseDouble(cleaned));
+            if (!cleaned.isEmpty()) {
+                try {
+                    out.add(Double.parseDouble(cleaned));
+                } catch (NumberFormatException ignored) {
+                    // ignore malformed price entries; keep going
+                }
+            }
         }
         logger.debug("Read prices: {}", out);
         return out;
@@ -104,22 +111,22 @@ public class ProductsPage {
     }
 
     // ---------- landing actions ----------
-    @Step("Check if '{productName}' is already in cart (Remove button visible)")
+    @Step("Check if '{productName}' is already in cart (Remove button present)")
     public boolean isInCartOnLanding(String productName) {
-        boolean inCart = bot.isElementVisible(removeButton(productName));
+        boolean inCart = bot.exists(removeButton(productName)); // quick probe; visibility not required
         logger.info("'{}' in cart on landing? {}", productName, inCart);
         return inCart;
     }
 
     @Step("Click 'Add to cart' for '{productName}' on landing")
     public ProductsPage clickAddOnLanding(String productName) {
-        bot.clickWhenVisible(addButton(productName));
+        bot.click(addButton(productName));
         return this;
     }
 
     @Step("Click 'Remove' for '{productName}' on landing")
     public ProductsPage clickRemoveOnLanding(String productName) {
-        bot.clickWhenVisible(removeButton(productName));
+        bot.click(removeButton(productName));
         return this;
     }
 
@@ -151,27 +158,38 @@ public class ProductsPage {
         return this;
     }
 
-    @Step("Add '{firstProduct}' and '{secondProduct}', then verify cart count increased by 2")
-    public boolean addProductsAndVerifyCart(String firstProduct, String secondProduct) {
-        try {
-            int start = getCartCount();
-
-            addProduct(firstProduct);   // this already waits for +1 internally
-            addProduct(secondProduct);  // and this waits for the next +1
-
-            int expected = start + 2;
-            // optional: if you want an explicit final check, you can reuse your waitForCartCount(expected)
-            waitForCartCount(expected);
-
-            int end = getCartCount();
-            boolean ok = (end == expected);
-            if (ok) logger.info("✅ Added '{}' & '{}' successfully ({} → {})", firstProduct, secondProduct, start, end);
-            else logger.warn("❌ Cart count mismatch after adding two: expected {}, got {}", expected, end);
-            return ok;
-        } catch (Exception e) {
-            logger.error("❌ Error adding two products: {}", e.getMessage());
-            return false;
+    @Step("Add products {productNames} and verify cart count increases accordingly")
+    public boolean addProductsAndVerifyCart(String... productNames) {
+        if (productNames == null || productNames.length == 0) {
+            logger.warn("No product names supplied to addProductsAndVerifyCart()");
+            return true; // nothing to do
         }
+        int start = getCartCount();
+        int toAdd = 0;
+        for (String name : productNames) {
+            if (name == null || name.isBlank()) {
+                logger.warn("Skipped blank/null product name in addProductsAndVerifyCart()");
+                continue;
+            }
+            if (isInCartOnLanding(name)) {
+                logger.info("'{}' already in cart — skipping add", name);
+                continue;
+            }
+            toAdd++;
+            addProduct(name); // this already waits for button swap + badge +1 for this item
+        }
+        int expected = start + toAdd;
+        // Final confirmation that the badge reached the intended total
+        waitForCartCount(expected);
+        int end = getCartCount();
+        boolean ok = (end == expected);
+        if (ok) {
+            logger.info("✅ Added {} new item(s) successfully: {} → {}", toAdd, start, end);
+        } else {
+            logger.warn("❌ Cart count mismatch after adding items: expected {}, got {} (start was {})",
+                    expected, end, start);
+        }
+        return ok;
     }
 
     @Step("Remove '{productName}' from landing (idempotent; verify button swap and badge -1)")
@@ -200,7 +218,7 @@ public class ProductsPage {
 
     @Step("Logout via menu")
     public LoginPage logout() {
-        bot.click(menuBtn).click(logoutLink);
+        bot.click(menuBtn).click(logoutLink); // each click is a single waited action
         logger.info("Logged out via menu and redirected to login page");
         return new LoginPage(bot);
     }

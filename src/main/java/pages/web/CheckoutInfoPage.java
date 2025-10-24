@@ -22,7 +22,6 @@ public class CheckoutInfoPage {
     private final By lastNameField = By.id("last-name");
     private final By postalField = By.id("postal-code");
     private final By continueBtn = By.id("continue");
-    private final By cancelBtn = By.id("cancel");
 
     // ---------- Constructor ----------
     public CheckoutInfoPage(WebDriverBot bot) {
@@ -40,10 +39,9 @@ public class CheckoutInfoPage {
      * @param first First name of the customer.
      * @param last  Last name of the customer.
      * @param zip   Postal or ZIP code.
-     * @return CheckoutInfoPage (for chaining).
      */
     @Step("Fill checkout form with: First='{first}', Last='{last}', ZIP='{zip}'")
-    public CheckoutInfoPage fillInfo(String first, String last, String zip) {
+    public void fillInfo(String first, String last, String zip) {
         String f = first == null ? "" : first.trim();
         String l = last == null ? "" : last.trim();
         String z = zip == null ? "" : zip.trim();
@@ -54,7 +52,6 @@ public class CheckoutInfoPage {
                 .type(l, lastNameField)
                 .type(z, postalField);
 
-        return this;
     }
 
     /**
@@ -88,17 +85,5 @@ public class CheckoutInfoPage {
         bot.click(continueBtn);
         logger.info("Navigated to Checkout Overview page");
         return new CheckoutOverviewPage(bot);
-    }
-
-    /**
-     * Clicks the Cancel button to return back to the Cart page.
-     *
-     * @return CartPage instance.
-     */
-    @Step("Cancel checkout and return to Cart page")
-    public CartPage cancelAndReturnToCart() {
-        bot.click(cancelBtn);
-        logger.info("Cancelled checkout and returned to Cart page");
-        return new CartPage(bot);
     }
 }

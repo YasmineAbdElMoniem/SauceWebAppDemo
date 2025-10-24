@@ -49,7 +49,7 @@ public class WebDriverBot {
     // ================ Browser Lifecycle =========================
     // ============================================================
 
-    @Step("Initialize WebDriver with browser: {cfg.browser}")
+    @Step("Initialize WebDriver with selected browser configuration")
     private void initialize() {
         switch (cfg.browser.toLowerCase()) {
             case "chrome" -> driver = new ChromeDriver(chromeOptions());
@@ -64,7 +64,9 @@ public class WebDriverBot {
                 .ignoring(NoSuchElementException.class)
                 .ignoring(ElementNotInteractableException.class)
                 .ignoring(StaleElementReferenceException.class)
-                .ignoring(NotFoundException.class);
+                .ignoring(NotFoundException.class)
+                .ignoring(ElementClickInterceptedException.class);
+
 
         driver.manage().timeouts().pageLoadTimeout(Duration.ofSeconds(cfg.pageLoadTimeoutSec));
         applySmartWindowSizing();
@@ -183,120 +185,220 @@ public class WebDriverBot {
     // ================ Core Actions (Public) =====================
     // ============================================================
 
+    // ============================================================
+    // ================ Core Actions (single-wait) ================
+    // ============================================================
+
+    /**
+     * Quick helper used inside a single wait cycle to decide if the element can be interacted with.
+     */
+    @SuppressWarnings("BooleanMethodIsAlwaysInverted")
+    private boolean isInteractable(WebElement el) {
+        try {
+            if (!el.isDisplayed() || !el.isEnabled()) return false;
+            String disabled = el.getAttribute("disabled");
+            return disabled == null || disabled.equalsIgnoreCase("false");
+        } catch (StaleElementReferenceException ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * Navigate to a URL (WebDriver navigation handles its own waiting).
+     */
     @Step("Navigate to URL: {url}")
     public void navigateTo(String url) {
         driver.navigate().to(url);
         logger.info("🌐 Navigated to: {}", url);
     }
 
-    @Step("Type '{text}' into element located by {locator}")
-    public WebDriverBot type(String text, By locator) {
-        wait.until(d -> {
-            WebElement el = d.findElement(locator);
-            el.clear();
-            el.sendKeys(text);
-            return true;
-        });
-        logger.debug("Typed '{}' into {}", text, locator);
-        return this;
-    }
-
+    /**
+     * Click an element with a single FluentWait cycle.
+     * Retries transparently on common transient failures (stale, intercepted).
+     */
     @Step("Click element located by {locator}")
     public WebDriverBot click(By locator) {
         wait.until(d -> {
-            d.findElement(locator).click();
-            return true;
+            try {
+                WebElement el = d.findElement(locator);
+                if (!isInteractable(el)) return false;
+                el.click();
+                return true;
+            } catch (ElementClickInterceptedException | StaleElementReferenceException e) {
+                return false; // retry on next poll
+            } catch (NoSuchElementException e) {
+                return false;
+            }
         });
         logger.debug("Clicked element: {}", locator);
         return this;
     }
 
-    @Step("Click element when visible: {locator}")
-    public void clickWhenVisible(By locator) {
-        waitForVisibility(locator);
-        click(locator);
+    /**
+     * Type text into an element with a single FluentWait cycle.
+     * Clears safely (ignoring inputs that don't support clear) then sends keys.
+     */
+    @Step("Type '{text}' into element located by {locator}")
+    public WebDriverBot type(String text, By locator) {
+        wait.until(d -> {
+            try {
+                WebElement el = d.findElement(locator);
+                if (!isInteractable(el)) return false;
+                try {
+                    el.clear();
+                } catch (InvalidElementStateException ignore) {
+                    // Some inputs (e.g., read-only or masked) may not support clear() before first type.
+                }
+                el.sendKeys(text);
+                return true;
+            } catch (StaleElementReferenceException | NoSuchElementException e) {
+                return false;
+            }
+        });
+        logger.debug("Typed '{}' into {}", text, locator);
+        return this;
     }
 
-    @Step("Wait for element to be visible: {locator}")
-    public void waitForVisibility(By locator) {
-        wait.until(d -> d.findElement(locator).isDisplayed());
-        logger.debug("Element visible: {}", locator);
-    }
-
-    @Step("Wait for element to disappear: {locator}")
-    public void waitForGone(By locator) {
-        wait.until(d -> d.findElements(locator).isEmpty());
-        logger.debug("Element disappeared: {}", locator);
-    }
-
+    /**
+     * Read visible text from an element with a single FluentWait cycle.
+     */
     @Step("Read text from element: {locator}")
     public String getText(By locator) {
-        String text = wait.until(d -> d.findElement(locator).getText().trim());
+        String text = wait.until(d -> {
+            try {
+                WebElement el = d.findElement(locator);
+                return el.isDisplayed() ? el.getText().trim() : null;
+            } catch (StaleElementReferenceException | NoSuchElementException e) {
+                return null;
+            }
+        });
         logger.debug("Read text '{}' from {}", text, locator);
         return text;
     }
 
+    /**
+     * Read texts from all matching elements without waiting.
+     * If you need waiting semantics, call {@link #waitForVisibility(By)} first from your page object.
+     */
     @Step("Read all texts from elements: {locator}")
     public List<String> getTexts(By locator) {
-        List<String> texts = new ArrayList<>();
+        List<String> out = new ArrayList<>();
         for (WebElement el : findAll(locator)) {
-            texts.add(el.getText().trim());
+            try {
+                out.add(el.getText().trim());
+            } catch (StaleElementReferenceException ignored) {
+                // Skip stale and continue; next poll from caller (if any) will refresh
+            }
         }
-        logger.debug("Read {} elements' text from {}", texts.size(), locator);
-        return texts;
+        logger.debug("Read {} elements' text from {}", out.size(), locator);
+        return out;
     }
 
     /**
-     * Return the integer text of the FIRST element at locator if present, otherwise defaultValue.
-     * Never waits for presence; safe for optional UI like the cart badge.
+     * Extract an integer from the FIRST element's text if present; otherwise return default.
+     * No wait — safe for optional UI (e.g., cart badge).
      */
     @Step("Extract optional integer from {locator} (default={defaultValue})")
     public int getIntIfPresent(By locator, int defaultValue) {
         try {
             var els = findAll(locator);
             if (els.isEmpty()) return defaultValue;
-            String txt = els.getFirst().getText().trim();
-            String digits = txt.replaceAll("\\D+", "");
+            String digits = els.getFirst().getText().replaceAll("\\D+", "");
             return digits.isEmpty() ? defaultValue : Integer.parseInt(digits);
         } catch (Exception e) {
             return defaultValue;
         }
     }
 
-    @Step("Check if element is visible: {locator}")
+    // ============================================================
+    // ================ Helper waits  ===================
+    // Note: This uses the same shared FluentWait instance configured at initialization.
+    // ============================================================
+
+    /**
+     * Wait until element is visible (use from page objects when visibility is a precondition).
+     */
+    @Step("Wait for element to be visible: {locator}")
+    public void waitForVisibility(By locator) {
+        wait.until(d -> {
+            try {
+                return d.findElement(locator).isDisplayed();
+            } catch (NoSuchElementException | StaleElementReferenceException e) {
+                return false;
+            }
+        });
+        logger.debug("Element visible: {}", locator);
+    }
+
+    /**
+     * Wait until element disappears / is not present.
+     */
+    @Step("Wait for element to disappear: {locator}")
+    public void waitForGone(By locator) {
+        wait.until(d -> d.findElements(locator).isEmpty());
+        logger.debug("Element disappeared: {}", locator);
+    }
+
+    // ============================================================
+    // ================ Probes (no wait) ==========================
+    // ============================================================
+
+    /**
+     * Instant probe: is the element displayed right now?
+     * No wait. Use for optional UI checks (don’t use to guard critical clicks).
+     */
+    @Step("Check if element is visible now: {locator}")
     public boolean isElementVisible(By locator) {
         try {
-            boolean visible = driver.findElement(locator).isDisplayed();
-            logger.debug("Element visible status ({}): {}", locator, visible);
-            return visible;
-        } catch (NoSuchElementException e) {
+            return driver.findElement(locator).isDisplayed();
+        } catch (NoSuchElementException | StaleElementReferenceException e) {
             return false;
         }
     }
 
-    @Step("Check if element is enabled: {locator}")
+    /**
+     * Instant probe: is the element enabled right now?
+     * No wait. Use for quick state checks.
+     */
+    @Step("Check if element is enabled now: {locator}")
     public boolean isElementEnabled(By locator) {
         try {
-            boolean enabled = driver.findElement(locator).isEnabled();
-            logger.debug("Element enabled status ({}): {}", locator, enabled);
-            return enabled;
-        } catch (NoSuchElementException e) {
+            return driver.findElement(locator).isEnabled();
+        } catch (NoSuchElementException | StaleElementReferenceException e) {
             return false;
         }
+    }
+
+    /**
+     * Instant probe: does at least one element exist for this locator?
+     * No wait. Returns false if none present.
+     */
+    @Step("Check if any element exists now: {locator}")
+    public boolean exists(By locator) {
+        return !driver.findElements(locator).isEmpty();
     }
 
     // ============================================================
     // ================ Utilities ================================
     // ============================================================
 
+    /**
+     * Read-all without waiting.
+     */
     public List<WebElement> findAll(By locator) {
         return driver.findElements(locator);
     }
 
+    /**
+     * Custom single wait for arbitrary conditions (use sparingly in page objects).
+     */
     public void until(Function<WebDriver, Boolean> condition) {
         wait.until(condition);
     }
 
+    /**
+     * Expose raw driver for screenshots/JS/etc.
+     */
     public WebDriver getDriver() {
         return driver;
     }

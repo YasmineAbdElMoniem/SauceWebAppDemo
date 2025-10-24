@@ -81,12 +81,12 @@ public class RemoveAndCancelCheckoutFlowTest extends BaseTest {
                 .addProduct(firstProduct)          // add 1 item
                 .openCart()                        // → Cart
                 .startCheckout()                   // → Info
-                .fillInfo("Jane", "Doe", "12345")  // fill but DO NOT continue
-                .cancelAndReturnToCart()           // cancel from Info step (uses the method)
+                .fillAndContinue("Jessy", "Roy", "123")
+                .cancelCheckoutOverview()
                 .getCartCount();                   // still 1
 
         Assert.assertEquals(cartCount, 1,
-                "After canceling from Info step, the single added item should remain in the cart.");
+                "After canceling from overview step, the single added item should remain in the cart.");
     }
 
     /**

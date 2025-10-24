@@ -5,7 +5,6 @@ import io.qameta.allure.Step;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.openqa.selenium.By;
-import org.openqa.selenium.WebElement;
 
 /**
  * Represents the Cart page in SauceDemo.
@@ -19,16 +18,39 @@ public class CartPage {
 
     // ---------- UI Locators ----------
     private final By cartBadge = By.className("shopping_cart_badge");
-    private final By removeBtnInRow = By.xpath(".//button[contains(@id,'remove-')]");
     private final By checkoutBtn = By.id("checkout");
     private final By continueBtn = By.id("continue-shopping");
 
-    // ---------- Constructor ----------
     public CartPage(WebDriverBot bot) {
         this.bot = bot;
         logger.info("✅ CartPage initialized successfully");
     }
 
+    // ---------- Row locators ----------
+
+    /**
+     * Row that contains an item by its name.
+     */
+    private By itemRowByName(String productName) {
+        String xpath = String.format(
+                "//div[@class='cart_item'][.//div[normalize-space(text())='%s']]",
+                productName
+        );
+        logger.debug("Building dynamic locator for item row → {}", xpath);
+        return By.xpath(xpath);
+    }
+
+    /**
+     * The 'Remove' button but scoped to the specific row
+     */
+    private By removeButtonFor(String productName) {
+        String xpath = String.format(
+                "//div[@class='cart_item'][.//div[normalize-space(text())='%s']]//button[contains(@id,'remove-')]",
+                productName
+        );
+        logger.debug("Building dynamic locator for Remove button → {}", xpath);
+        return By.xpath(xpath);
+    }
     // ============================================================
     // =============== Badge (Cart Count) Helpers =================
     // ============================================================
@@ -42,9 +64,7 @@ public class CartPage {
     }
 
     /**
-     * Waits until the cart badge count matches the expected number.
-     *
-     * @param expected Expected badge value.
+     * Wait until the cart badge equals the expected value.
      */
     @Step("Wait until cart badge count equals {expected}")
     private void waitForCartCount(int expected) {
@@ -52,43 +72,8 @@ public class CartPage {
         logger.debug("Waited for cart count to equal {}", expected);
     }
 
-    // ============================================================
-    // =============== Row (Cart Item) Helpers ====================
-    // ============================================================
-
     /**
-     * Returns the locator of a specific cart item row by product name.
-     */
-    private By itemRowByName(String productName) {
-        return By.xpath("//div[@class='cart_item' and .//div[@class='inventory_item_name' " +
-                "and normalize-space()='" + productName + "']]");
-    }
-
-    /**
-     * Finds and returns the WebElement row for a given product.
-     *
-     * @param productName The product name as displayed in the cart.
-     * @return The row element, or {@code null} if not found.
-     */
-    private WebElement findRow(String productName) {
-        var rows = bot.findAll(itemRowByName(productName));
-        return rows.isEmpty() ? null : rows.getFirst();
-    }
-
-    /**
-     * Clicks the “Remove” button within the given row.
-     *
-     * @param row Row element containing the target product.
-     */
-    private void clickRemoveInRow(WebElement row) {
-        row.findElement(removeBtnInRow).click();
-        logger.debug("Clicked Remove button inside row");
-    }
-
-    /**
-     * Waits until the row for a given product disappears from the DOM.
-     *
-     * @param productName The product name.
+     * Wait until the item row disappears from the DOM.
      */
     @Step("Wait until product '{productName}' row disappears from cart")
     private void waitRowDisappears(String productName) {
@@ -109,7 +94,7 @@ public class CartPage {
     @Step("Verify products are present in the cart: {productNames}")
     public boolean areProductsInCart(String... productNames) {
         for (String name : productNames) {
-            boolean exists = !bot.findAll(itemRowByName(name)).isEmpty();
+            boolean exists = bot.exists(itemRowByName(name)); // faster/clearer probe
             if (!exists) {
                 logger.warn("❌ Product '{}' NOT found in cart", name);
                 return false;
@@ -120,19 +105,18 @@ public class CartPage {
     }
 
     /**
-     * Removes a specific product from the cart.
+     * Removes a specific product from the cart
      *
      * @param productName Product name to remove.
-     * @return true if removed, false if not found.
+     * @return true if we initiated removal (row existed); false if not found.
      */
     @Step("Remove product '{productName}' from cart")
     public boolean removeProduct(String productName) {
-        WebElement row = findRow(productName);
-        if (row == null) {
+        if (!bot.exists(itemRowByName(productName))) {
             logger.warn("⚠️ Product '{}' not found in cart — cannot remove", productName);
             return false;
         }
-        clickRemoveInRow(row);
+        bot.click(removeButtonFor(productName));
         waitRowDisappears(productName);
         logger.info("🗑️ Product '{}' removed from cart", productName);
         return true;
@@ -149,9 +133,7 @@ public class CartPage {
         int before = getCartCount();
         int expected = Math.max(0, before - 1);
 
-        if (!removeProduct(productName)) {
-            return false;
-        }
+        if (!removeProduct(productName)) return false;
 
         waitForCartCount(expected);
         int after = getCartCount();
@@ -162,7 +144,6 @@ public class CartPage {
         } else {
             logger.warn("⚠️ Cart badge mismatch after removing '{}': expected {}, found {}", productName, expected, after);
         }
-
         return ok;
     }
 
@@ -172,8 +153,6 @@ public class CartPage {
 
     /**
      * Clicks “Continue Shopping” and returns to Products page.
-     *
-     * @return ProductsPage instance.
      */
     @Step("Continue shopping (navigate back to Products page)")
     public ProductsPage continueShopping() {
@@ -184,8 +163,6 @@ public class CartPage {
 
     /**
      * Clicks “Checkout” and moves to Checkout Info page.
-     *
-     * @return CheckoutInfoPage instance.
      */
     @Step("Proceed to Checkout from Cart page")
     public CheckoutInfoPage startCheckout() {
@@ -195,9 +172,7 @@ public class CartPage {
     }
 
     /**
-     * Checks if the checkout button is currently enabled.
-     *
-     * @return true if enabled, false otherwise.
+     * Quick probe (no wait) whether Checkout is enabled right now.
      */
     @Step("Check if Checkout button is enabled")
     public boolean isCheckoutButtonEnabled() {
